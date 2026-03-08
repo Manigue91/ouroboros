@@ -15,7 +15,7 @@ import logging
 import subprocess
 import sys
 import threading
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from playwright_stealth import Stealth
@@ -96,7 +96,7 @@ def _reset_playwright_greenlet():
     log.info("Playwright greenlet state reset complete")
 
 
-def _ensure_browser(ctx: ToolContext):
+def _ensure_browser(ctx: ToolContext, user_agent: Optional[str] = None):
     """Create or reuse browser for this task. Browser state lives in ctx,
     but Playwright instance is module-level to avoid greenlet issues."""
     global _pw_instance, _pw_thread_id
@@ -152,12 +152,15 @@ def _ensure_browser(ctx: ToolContext):
             "--window-size=1920,1080",
         ],
     )
+    
+    final_user_agent = user_agent or (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+
     ctx.browser_state.page = ctx.browser_state.browser.new_page(
         viewport={"width": 1920, "height": 1080},
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        ),
+        user_agent=final_user_agent,
     )
 
     if _HAS_STEALTH:
@@ -197,7 +200,7 @@ def cleanup_browser(ctx: ToolContext) -> None:
     ctx.browser_state.pw_instance = None
 
 
-_MARKDOWN_JS = """() => {
+_MARKDOWN_JS = '''() => {
     const walk = (el) => {
         let out = '';
         for (const child of el.childNodes) {
@@ -208,9 +211,9 @@ _MARKDOWN_JS = """() => {
                 const tag = child.tagName;
                 if (['SCRIPT','STYLE','NOSCRIPT'].includes(tag)) continue;
                 if (['H1','H2','H3','H4','H5','H6'].includes(tag))
-                    out += '\\n' + '#'.repeat(parseInt(tag[1])) + ' ';
-                if (tag === 'P' || tag === 'DIV' || tag === 'BR') out += '\\n';
-                if (tag === 'LI') out += '\\n- ';
+                    out += '\n' + '#'.repeat(parseInt(tag[1])) + ' ';
+                if (tag === 'P' || tag === 'DIV' || tag === 'BR') out += '\n';
+                if (tag === 'LI') out += '\n- ';
                 if (tag === 'A') out += '[';
                 out += walk(child);
                 if (tag === 'A') out += '](' + (child.href||'') + ')';
@@ -219,7 +222,7 @@ _MARKDOWN_JS = """() => {
         return out;
     };
     return walk(document.body);
-}"""
+}'''
 
 
 def _extract_page_output(page: Any, output: str, ctx: ToolContext) -> str:
@@ -244,9 +247,9 @@ def _extract_page_output(page: Any, output: str, ctx: ToolContext) -> str:
 
 
 def _browse_page(ctx: ToolContext, url: str, output: str = "text",
-                 wait_for: str = "", timeout: int = 30000) -> str:
+                 wait_for: str = "", timeout: int = 30000, user_agent: Optional[str] = None) -> str:
     try:
-        page = _ensure_browser(ctx)
+        page = _ensure_browser(ctx, user_agent=user_agent)
         page.goto(url, timeout=timeout, wait_until="domcontentloaded")
         if wait_for:
             page.wait_for_selector(wait_for, timeout=timeout)
@@ -256,7 +259,7 @@ def _browse_page(ctx: ToolContext, url: str, output: str = "text",
             log.warning(f"Browser thread error detected: {e}. Resetting Playwright and retrying...")
             cleanup_browser(ctx)
             _reset_playwright_greenlet()
-            page = _ensure_browser(ctx)
+            page = _ensure_browser(ctx, user_agent=user_agent)
             page.goto(url, timeout=timeout, wait_until="domcontentloaded")
             if wait_for:
                 page.wait_for_selector(wait_for, timeout=timeout)
@@ -356,6 +359,10 @@ def get_tools() -> List[ToolEntry]:
                             "type": "integer",
                             "description": "Page load timeout in ms (default: 30000)",
                         },
+                        "user_agent": {
+                            "type": "string",
+                            "description": "Custom User-Agent header for the browser",
+                        }
                     },
                     "required": ["url"],
                 },
@@ -383,21 +390,21 @@ def get_tools() -> List[ToolEntry]:
                         },
                         "selector": {
                             "type": "string",
-                            "description": "CSS selector for click/fill/select",
-                        },
-                        "value": {
-                            "type": "string",
-                            "description": "Value for fill/select, JS for evaluate, direction for scroll",
+                            "description": "CSS selector for click/fill/select"
                         },
                         "timeout": {
                             "type": "integer",
-                            "description": "Action timeout in ms (default: 5000)",
+                            "description": "Action timeout in ms (default: 5000)"
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Value for fill/select, JS for evaluate, direction for scroll"
                         },
                     },
                     "required": ["action"],
                 },
             },
             handler=_browser_action,
-            timeout_sec=60,
+            timeout_sec=30,
         ),
     ]
